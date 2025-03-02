@@ -1,29 +1,30 @@
-const grpc = require("@grpc/grpc-js");
-const protoLoader = require("@grpc/proto-loader");
+const grpc = require('@grpc/grpc-js');
+const protoLoader = require('@grpc/proto-loader');
+const path = require('path');
+const loadProto = (protoFile) => {
+    const packageDefinition = protoLoader.loadSync("" + path.join("../", "../backend/proto/", protoFile), {
+        keepCase: true,
+        longs: String,
+        enums: String,
+        defaults: true,
+        oneofs: true
+    });
+    return grpc.loadPackageDefinition(packageDefinition);
+};
 
-// Load the .proto file
-const packageDefinition = protoLoader.loadSync("../proto/hello.proto", {
-  keepCase: true,
-  longs: String,
-  enums: String,
-  defaults: true,
-  oneofs: true,
-});
-const helloProto = grpc.loadPackageDefinition(packageDefinition).hello;
+// Load all proto services
+const hashingProto = loadProto('hashing.proto').hashing;
+const encryptionProto = loadProto('encryption.proto').encryption;
 
-// Create a gRPC client
-const client = new helloProto.HelloService(
-  "localhost:5001",
-  grpc.credentials.createInsecure()
+// Create gRPC clients
+const hashingClient = new hashingProto.HashingService(
+    'localhost:5001',
+    grpc.credentials.createInsecure()
 );
 
-// Send a request every 1 second
-setInterval(() => {
-  client.SayHelloBro({ message: "Hello from Express!" }, (error, response) => {
-    if (error) {
-      console.error("Error:", error);
-    } else {
-      console.log("Server Response:", response.reply);
-    }
-  });
-}, 1000);
+const encryptionClient = new encryptionProto.EncryptionService(
+    'localhost:5001',
+    grpc.credentials.createInsecure()
+);
+
+module.exports = { hashingClient, encryptionClient };
