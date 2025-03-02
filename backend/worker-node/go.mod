@@ -1,4 +1,4 @@
-module worker-node
+module github.com/saiweb3dev/decentralized-compute-network/backend/worker-node
 
 go 1.23.1
 

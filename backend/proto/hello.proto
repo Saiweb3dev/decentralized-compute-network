@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package hello;
+
+
+option go_package = "worker-node/proto";
+
+service HelloService {
+  rpc SayHelloBro (HelloRequest) returns (HelloResponse);
+}
+
+message HelloRequest {
+  string message = 1;
+}
+
+message HelloResponse {
+  string reply = 1;
+}
