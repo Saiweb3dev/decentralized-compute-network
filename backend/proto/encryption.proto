@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package encryption;
+
+option go_package = "worker-node/proto/encryption";
+
+service EncryptionService {
+  rpc EncryptAES256 (EncryptionRequest) returns (EncryptionResponse);
+  rpc DecryptAES256 (EncryptionRequest) returns (EncryptionResponse);
+  rpc EncryptRSA2048 (EncryptionRequest) returns (EncryptionResponse);
+  rpc DecryptRSA2048 (EncryptionRequest) returns (EncryptionResponse);
+}
+
+message EncryptionRequest {
+  string plaintext = 1;
+  string key = 2;
+}
+
+message EncryptionResponse {
+  string ciphertext = 1;
+}

@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package modexp;
+
+option go_package = "worker-node/proto/modexp";
+
+service ModExpService {
+  rpc ComputeModExp (ModExpRequest) returns (ModExpResponse);
+}
+
+message ModExpRequest {
+  string base = 1;
+  string exponent = 2;
+  string modulus = 3;
+}
+
+message ModExpResponse {
+  string result = 1;
+}

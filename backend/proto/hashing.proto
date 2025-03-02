@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package hashing;
+
+option go_package = "worker-node/proto/hashing";
+
+service HashingService {
+  rpc ComputeSHA256 (HashRequest) returns (HashResponse);
+  rpc ComputeKeccak256 (HashRequest) returns (HashResponse);
+  rpc ComputeBlake2b (HashRequest) returns (HashResponse);
+}
+
+message HashRequest {
+  string input = 1;
+}
+
+message HashResponse {
+  string hash = 1;
+}
