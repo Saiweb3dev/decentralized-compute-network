@@ -5,12 +5,18 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"time"
+	"os"
+	"os/signal"
+	"syscall"
 
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
+	
+	"github.com/saiweb3dev/decentralized-compute-network/backend/worker-node/config"
+	"github.com/saiweb3dev/decentralized-compute-network/backend/worker-node/coordinator"
+	"github.com/saiweb3dev/decentralized-compute-network/backend/worker-node/interceptors"
+	"github.com/saiweb3dev/decentralized-compute-network/backend/worker-node/logger"
+	"go.uber.org/zap"
 
 	pb_hashing "github.com/saiweb3dev/decentralized-compute-network/backend/worker-node/proto/hashing"
 	pb_encryption "github.com/saiweb3dev/decentralized-compute-network/backend/worker-node/proto/encryption"
@@ -21,81 +27,81 @@ import (
 	"github.com/saiweb3dev/decentralized-compute-network/backend/worker-node/services/modexp"
 )
 
-// CustomLoggerInterceptor is a UnaryServerInterceptor that provides simplified logging
-func CustomLoggerInterceptor(logger *zap.Logger) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		startTime := time.Now()
-		
-		// Extract method and service from the full method name (format: "/service.name/method")
-		fullMethodName := info.FullMethod
-		var service, method string
-		
-		// Simple parsing of the full method name
-		for i := 1; i < len(fullMethodName); i++ {
-			if fullMethodName[i] == '/' {
-				service = fullMethodName[1:i]
-				method = fullMethodName[i+1:]
-				break
-			}
-		}
-		
-		// Process the request
-		resp, err := handler(ctx, req)
-		
-		// Calculate duration
-		duration := time.Since(startTime)
-		durationMs := float64(duration.Milliseconds())
-		
-		// Create a simplified and colorful log message
-		status := "OK"
-		if err != nil {
-			status = "ERROR"
-		}
-		
-		// Log with colors and only the fields we care about
-		logger.Info(fmt.Sprintf("\x1b[36m%s.%s\x1b[0m completed in \x1b[33m%.2fms\x1b[0m with status \x1b[32m%s\x1b[0m", 
-			service, method, durationMs, status))
-		
-		return resp, err
-	}
-}
-
 func main() {
-	// Custom zap logger config
-	config := zap.NewProductionConfig()
-	config.Encoding = "console"
-	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-	config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-	config.OutputPaths = []string{"stdout"}
-	config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
+	// 1. Load application configuration
+	cfg := config.LoadConfig()
 	
-	logger, err := config.Build()
+	// 2. Initialize logger
+	zapLogger, err := logger.InitLogger(cfg.LogLevel)
 	if err != nil {
-		log.Fatalf("Failed to build logger: %v", err)
+		log.Fatalf("Failed to initialize logger: %v", err)
 	}
-	defer logger.Sync()
+	defer zapLogger.Sync()
 	
-	// Create gRPC server with our custom logging interceptor
-	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(CustomLoggerInterceptor(logger)),
+	zapLogger.Info("Starting worker node", 
+		zap.String("nodeId", cfg.NodeID),
+		zap.String("address", cfg.NodeAddress))
+	
+	// 3. Initialize Redis client
+	redisClient, err := coordinator.NewRedisClient(cfg.RedisAddress, zapLogger)
+	if err != nil {
+		zapLogger.Fatal("Failed to connect to Redis", zap.Error(err))
+	}
+	defer redisClient.Close()
+	
+	// 4. Initialize node coordinator
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
+	nodeCoordinator := coordinator.NewNodeCoordinator(
+		cfg.NodeID,
+		cfg.NodeAddress,
+		redisClient,
+		cfg.MaxTasks,
+		zapLogger,
 	)
-
-	// Register services
+	
+	// 5. Start the coordinator
+	nodeCoordinator.Start(ctx)
+	
+	// 6. Create gRPC server with our custom logging interceptor
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(interceptors.LoggingInterceptor(zapLogger, nodeCoordinator)),
+	)
+	
+	// 7. Register services
 	pb_hashing.RegisterHashingServiceServer(grpcServer, &hashing.HashingServiceServer{})
 	pb_encryption.RegisterEncryptionServiceServer(grpcServer, &encryption.EncryptionServiceServer{})
 	pb_modexp.RegisterModExpServiceServer(grpcServer, &modexp.ModExpServiceServer{})
-
-	// Enable gRPC reflection for debugging
+	
+	// 8. Enable gRPC reflection for debugging
 	reflection.Register(grpcServer)
-
-	// Start server
-	listener, err := net.Listen("tcp", ":5001")
+	
+	// 9. Set up graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	
+	// 10. Start the server
+	lis, err := net.Listen("tcp", cfg.NodeAddress)
 	if err != nil {
-		log.Fatalf("Failed to listen: %v", err)
+		zapLogger.Fatal("Failed to listen", zap.Error(err))
 	}
-
-	fmt.Println("🚀 gRPC Server running on port 5001...")
-	if err := grpcServer.Serve(listener); err != nil {
-		log.Fatalf("Failed to serve: %v", err)
-	}
+	
+	// 11. Start server in a goroutine so the signal handling doesn't block
+	go func() {
+		zapLogger.Info(fmt.Sprintf("🚀 gRPC Worker Node %s running on %s", cfg.NodeID, cfg.NodeAddress))
+		if err := grpcServer.Serve(lis); err != nil {
+			zapLogger.Fatal("Failed to serve", zap.Error(err))
+		}
+	}()
+	
+	// 12. Wait for termination signal
+	sig := <-sigChan
+	zapLogger.Info("Received termination signal", zap.String("signal", sig.String()))
+	
+	// 13. Graceful shutdown
+	zapLogger.Info("Shutting down gracefully...")
+	nodeCoordinator.Stop()
+	grpcServer.GracefulStop()
+	zapLogger.Info("Worker node shutdown complete")
 }
